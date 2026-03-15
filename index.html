@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<title>Prescription Label Reader & Verifier</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        primary: '#1a56db',
+        primaryDark: '#1340a8',
+        accent: '#f59e0b',
+        safeBg: '#0f172a',
+        safeText: '#f8fafc',
+        cardBg: '#1e293b',
+        successGreen: '#22c55e',
+        warningRed: '#ef4444',
+        warningYellow: '#fbbf24',
+      },
+      fontSize: {
+        'xxl': '1.75rem',
+        '3xl': '2rem',
+        '4xl': '2.5rem',
+      }
+    }
+  }
+}
+</script>
+<style>
+  * { -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f172a;
+    color: #f8fafc;
+    min-height: 100vh;
+  }
+  .btn-primary {
+    min-height: 56px;
+    min-width: 56px;
+    font-size: 1.25rem;
+    font-weight: 700;
+    border-radius: 16px;
+    transition: all 0.2s;
+  }
+  .btn-primary:active { transform: scale(0.97); }
+  .high-contrast-card {
+    background: #1e293b;
+    border: 2px solid #334155;
+    border-radius: 20px;
+    padding: 1.5rem;
+  }
+  .field-label {
+    color: #fbbf24;
+    font-weight: 800;
+    font-size: 1.1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .field-value {
+    color: #f8fafc;
+    font-size: 1.4rem;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .pulse-ring {
+    animation: pulse-ring 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+  }
+  @keyframes pulse-ring {
+    0% { box-shadow: 0 0 0 0 rgba(26, 86, 219, 0.5); }
+    70% { box-shadow: 0 0 0 20px rgba(26, 86, 219, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(26, 86, 219, 0); }
+  }
+  .spinner {
+    border: 4px solid rgba(255,255,255,0.2);
+    border-top: 4px solid #f59e0b;
+    border-radius: 50%;
+    width: 48px; height: 48px;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .fade-in { animation: fadeIn 0.4s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+  .quiz-btn {
+    min-height: 60px;
+    font-size: 1.2rem;
+    font-weight: 700;
+    border-radius: 14px;
+    transition: all 0.15s;
+    border: 3px solid transparent;
+  }
+  .quiz-btn:hover, .quiz-btn:focus { border-color: #f59e0b; }
+  .quiz-btn.correct { background: #166534 !important; border-color: #22c55e !important; }
+  .quiz-btn.incorrect { background: #7f1d1d !important; border-color: #ef4444 !important; }
+  input[type="file"] { display: none; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+  #cameraPreview video { width: 100%; max-height: 50vh; border-radius: 16px; object-fit: cover; }
+  .warning-badge { background: #7f1d1d; border: 2px solid #ef4444; border-radius: 12px; padding: 0.75rem 1rem; }
+  .safe-badge { background: #14532d; border: 2px solid #22c55e; border-radius: 12px; padding: 0.75rem 1rem; }
+  :focus-visible { outline: 3px solid #f59e0b; outline-offset: 2px; }
+  .toast {
+    position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+    background: #334155; color: #f8fafc; padding: 14px 24px; border-radius: 14px;
+    font-size: 1.1rem; font-weight: 600; z-index: 999; box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    animation: fadeIn 0.3s ease-out;
+  }
+</style>
+</head>
+<body>
+
+<div id="app" class="max-w-lg mx-auto px-4 pb-32">
+
+  <!-- Header -->
+  <header class="pt-6 pb-4 text-center sticky top-0 z-50 bg-safeBg/95 backdrop-blur-sm">
+    <h1 class="text-3xl font-extrabold tracking-tight">
+      💊 <span class="text-accent">RxReader</span>
+    </h1>
+    <p class="text-slate-400 text-lg mt-1">Prescription Label Reader & Verifier</p>
+  </header>
+
+  <!-- Screen: Home / Capture -->
+  <section id="screenHome" class="fade-in">
+    <!-- Onboarding hint -->
+    <div id="onboardingHint" class="high-contrast-card mb-6 text-center">
+      <p class="text-xl font-semibold mb-2">👋 Welcome!</p>
+      <p class="text-lg text-slate-300 leading-relaxed">
+        Take a photo of your prescription label and I'll read it aloud in large, clear text. Then we'll do a quick check to make sure you understand your medication.
+      </p>
+      <button onclick="dismissOnboarding()" class="mt-4 text-accent font-bold text-lg underline" aria-label="Dismiss onboarding hint">Got it!</button>
+    </div>
+
+    <!-- Main capture button -->
+    <div class="text-center mb-6">
+      <button id="captureBtn" onclick="startCapture()" 
+        class="btn-primary bg-primary hover:bg-primaryDark text-white px-10 py-5 pulse-ring w-full text-2xl"
+        aria-label="Take a photo of your prescription label">
+        📸 Scan Prescription Label
+      </button>
+      <p class="text-slate-400 mt-3 text-lg">Tap to take a photo or upload an image</p>
+    </div>
+
+    <input type="file" id="fileInput" accept="image/*" capture="environment" onchange="handleFileSelect(event)">
+
+    <!-- Camera preview -->
+    <div id="cameraPreview" class="hidden mb-6">
+      <video id="videoFeed" autoplay playsinline></video>
+      <div class="flex gap-4 mt-4">
+        <button onclick="captureFromCamera()" class="btn-primary bg-successGreen text-white flex-1 py-4" aria-label="Take photo now">
+          📷 Capture
+        </button>
+        <button onclick="stopCamera()" class="btn-primary bg-slate-600 text-white flex-1 py-4" aria-label="Cancel camera">
+          ✖️ Cancel
+        </button>
+      </div>
+    </div>
+    <canvas id="captureCanvas" class="hidden"></canvas>
+
+    <!-- Recent scans -->
+    <div id="recentScans" class="mt-6"></div>
+
+    <!-- Voice command hint -->
+    <div class="text-center mt-8">
+      <button onclick="toggleVoiceCommand()" id="voiceBtn"
+        class="btn-primary bg-cardBg border-2 border-slate-500 text-white px-8 py-4 w-full text-xl"
+        aria-label="Activate voice commands">
+        🎤 Voice Commands
+      </button>
+      <p class="text-slate-500 mt-2 text-base">Say "scan" to capture, "read" to hear again</p>
+    </div>
+
+    <!-- Pharmacy records -->
+    <div class="mt-8">
+      <button onclick="showPharmacyScreen()" class="btn-primary bg-cardBg border-2 border-accent text-accent px-8 py-4 w-full text-xl" aria-label="Manage pharmacy records">
+        🏥 My Prescriptions
+      </button>
+    </div>
+  </section>
+
+  <!-- Screen: Processing -->
+  <section id="screenProcessing" class="hidden fade-in text-center py-12">
+    <div class="spinner mx-auto mb-6"></div>
+    <p id="processingStatus" class="text-2xl font-bold text-accent">Reading your label...</p>
+    <p class="text-slate-400 text-lg mt-3">This may take a few moments</p>
+    <div id="processingSteps" class="mt-6 text-left max-w-sm mx-auto space-y-3"></div>
+  </section>
+
+  <!-- Screen: Results -->
+  <section id="screenResults" class="hidden fade-in">
+    <div id="resultContent"></div>
+    <div class="flex gap-3 mt-6">
+      <button onclick="speakResults()" class="btn-primary bg-accent text-safeBg flex-1 py-4 text-xl" aria-label="Read results aloud">
+        🔊 Read Aloud
+      </button>
+      <button onclick="stopSpeaking()" class="btn-primary bg-slate-600 text-white px-6 py-4" aria-label="Stop reading">
+        ⏹️
+      </button>
+    </div>
+    <button onclick="startVerification()" class="btn-primary bg-successGreen text-white w-full py-5 mt-4 text-xl" aria-label="Start comprehension check">
+      ✅ Verify I Understand
+    </button>
+    <button onclick="goHome()" class="btn-primary bg-cardBg border-2 border-slate-500 text-white w-full py-4 mt-3 text-xl" aria-label="Go back to home">
+      ← Back to Home
+    </button>
+  </section>
+
+  <!-- Screen: Verification Quiz -->
+  <section id="screenQuiz" class="hidden fade-in">
+    <div class="text-center mb-6">
+      <p class="text-2xl font-bold text-accent">📝 Comprehension Check</p>
+      <p class="text-lg text-slate-300 mt-2">Let's make sure you understand your medication</p>
+    </div>
+    <div id="quizContent"></div>
+    <div id="quizResult" class="hidden mt-6 text-center"></div>
+  </section>
+
+  <!-- Screen: Pharmacy Records -->
+  <section id="screenPharmacy" class="hidden fade-in">
+    <div class="flex items-center justify-between mb-6">
+      <h2 class="text-2xl font-bold text-accent">🏥 My Prescriptions</h2>
+      <button onclick="goHome()" class="text-accent text-lg font-bold" aria-label="Back to home">← Back</button>
+    </div>
+    <div id="pharmacyContent"></div>
+    <button onclick="addPrescription()" class="btn-primary bg-primary text-white w-full py-4 mt-4 text-xl" aria-label="Add a new prescription record">
+      ➕ Add Prescription Record
+    </button>
+  </section>
+
+  <!-- Screen: Add Prescription -->
+  <section id="screenAddRx" class="hidden fade-in">
+    <div class="flex items-center justify-between mb-6">
+      <h2 class="text-2xl font-bold text-accent">➕ Add Prescription</h2>
+      <button onclick="showPharmacyScreen()" class="text-accent text-lg font-bold" aria-label="Back to prescriptions">← Back</button>
+    </div>
+    <form id="rxForm" onsubmit="saveRx(event)" class="space-y-5">
+      <div>
+        <label class="field-label block mb-2" for="rxMedName">Medication Name *</label>
+        <input id="rxMedName" type="text" required placeholder="e.g. Metformin" class="w-full bg-slate-700 text-white text-xl p-4 rounded-xl border-2 border-slate-500 focus:border-accent" aria-label="Medication name">
+      </div>
+      <div>
+        <label class="field-label block mb-2" for="rxDose">Dosage *</label>
+        <input id="rxDose" type="text" required placeholder="e.g. 500mg" class="w-full bg-slate-700 text-white text-xl p-4 rounded-xl border-2 border-slate-500 focus:border-accent" aria-label="Dosage">
+      </div>
+      <div>
+        <label class="field-label block mb-2" for="rxFreq">Frequency *</label>
+        <input id="rxFreq" type="text" required placeholder="e.g. Twice daily with meals" class="w-full bg-slate-700 text-white text-xl p-4 rounded-xl border-2 border-slate-500 focus:border-accent" aria-label="Frequency">
+      </div>
+      <div>
+        <label class="field-label block mb-2" for="rxWarnings">Warnings</label>
+        <textarea id="rxWarnings" placeholder="e.g. Do not take with alcohol" class="w-full bg-slate-700 text-white text-xl p-4 rounded-xl border-2 border-slate-500 focus:border-accent" rows="3" aria-label="Warnings"></textarea>
+      </div>
+      <div>
+        <label class="field-label block mb-2" for="rxDoctor">Prescribing Doctor</label>
+        <input id="rxDoctor" type="text" placeholder="e.g. Dr. Smith" class="w-full bg-slate-700 text-white text-xl p-4 rounded-xl border-2 border-slate-500 focus:border-accent" aria-label="Doctor name">
+      </div>
+      <button type="submit" class="btn-primary bg-successGreen text-white w-full py-5 text-xl">
+        💾 Save Prescription
+      </button>
+    </form>
+  </section>
+
+</div>
+
+<!-- Toast container -->
+<div id="toastContainer"></div>
+
+<script>
+(function() {
+  // Global AI tracking
+  window.aiTotalInputTokens = 0;
+  window.aiTotalOutputTokens = 0;
+  window.aiTotalTime = 0;
+  window.aiAliasTimes = {};
+
+  const API_BASE = 'https://16504442930.work';
+  let currentLabelData = null;
+  let currentQuizData = null;
+  let mediaStream = null;
+  let isListening = false;
+  let recognition = null;
+
+  // Init
+  document.addEventListener('DOMContentLoaded', () => {
+    loadRecentScans();
+    if (localStorage.getItem('rxreader_onboarded')) {
+      document.getElementById('onboardingHint').classList.add('hidden');
+    }
+    initSpeechRecognition();
+  });
+
+  window.dismissOnboarding = function() {
+    localStorage.setItem('rxreader_onboarded', 'true');
+    document.getElementById('onboardingHint').classList.add('hidden');
+  };
+
+  // Navigation
+  function showScreen(id) {
+    ['screenHome', 'screenProcessing', 'screenResults', 'screenQuiz', 'screenPharmacy', 'screenAddRx'].forEach(s => {
+      document.getElementById(s).classList.add('hidden');
+    });
+    document.getElementById(id).classList.remove('hidden');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  window.goHome = function() {
+    stopSpeaking();
+    showScreen('screenHome');
+    loadRecentScans();
+  };
+
+  // Toast
+  function showToast(msg, duration = 3000) {
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = msg;
+    document.getElementById('toastContainer').appendChild(el);
+    setTimeout(() => el.remove(), duration);
+  }
+
+  // AI Call with retry
+  async function callAI(alias, params, retries = 3) {
+    const start = Date.now();
+    for (let i = 0; i < retries; i++) {
+      try {
+        const resp = await fetch(`${API_BASE}/run_prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ alias, params })
+        });
+        if (!resp.ok) {
+          const errText = await resp.text();
+          if (i === retries - 1) {
+            const friendly = await reformatError(errText);
+            throw new Error(friendly);
+          }
+          continue;
+        }
+        const data = await resp.json();
+        const elapsed = Date.now() - start;
+        window.aiTotalTime += elapsed;
+        window.aiAliasTimes[alias] = (window.aiAliasTimes[alias] || 0) + elapsed;
+        if (data.input_tokens) window.aiTotalInputTokens += data.input_tokens;
+        if (data.output_tokens) window.aiTotalOutputTokens += data.output_tokens;
+        return data;
+      } catch (e) {
+        if (i === retries - 1) throw e;
+      }
+    }
+  }
+
+  async function reformatError(errStr) {
+    try {
+      const resp = await callAI('genericAI', {
+        prompt: `You are a helpful assistant. A user encountered an error while using the "RxReader" prescription label reader app. Reformat the following error message to be user-friendly, empathetic, and actionable. Tell them what went wrong in simple language and suggest what they can try next. Also include the full original error for technical reference. Return a JSON object with exactly this structure: {"friendlyMessage": string, "suggestion": string, "originalError": string}. The error is: ${errStr}`
+      }, 1);
+      return `${resp.friendlyMessage || 'Something went wrong.'} ${resp.suggestion || 'Please try again.'}`;
+    } catch {
+      return `We encountered an issue. Please try again. (Technical details: ${errStr})`;
+    }
+  }
+
+  // File / Camera handling
+  window.startCapture = function() {
+    // Try camera first on mobile, fallback to file
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && /Mobi|Android/i.test(navigator.userAgent)) {
+      startCameraPreview();
+    } else {
+      document.getElementById('fileInput').click();
+    }
+  };
+
+  async function startCameraPreview() {
+    try {
+      const video = document.getElementById('videoFeed');
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+      });
+      video.srcObject = mediaStream;
+      document.getElementById('cameraPreview').classList.remove('hidden');
+    } catch {
+      document.getElementById('fileInput').click();
+    }
+  }
+
+  window.captureFromCamera = function() {
+    const video = document.getElementById('videoFeed');
+    const canvas = document.getElementById('captureCanvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    stopCamera();
+    const dataURL = canvas.toDataURL('image/jpeg', 0.9);
+    processImage(dataURL);
+  };
+
+  window.stopCamera = function() {
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(t => t.stop());
+      mediaStream = null;
+    }
+    document.getElementById('cameraPreview').classList.add('hidden');
+  };
+
+  window.handleFileSelect = function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      processImage(ev.target.result);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  // Process image
+  async function processImage(dataURL) {
+    showScreen('screenProcessing');
+    const stepsEl = document.getElementById('processingSteps');
+    stepsEl.innerHTML = '';
+
+    function addStep(text, done = false) {
+      const div = document.createElement('div');
+      div.className = `flex items-center gap-3 text-lg ${done ? 'text-successGreen' : 'text-slate-400'}`;
+      div.innerHTML = `<span class="text-2xl">${done ? '✅' : '⏳'}</span> <span>${text}</span>`;
+      stepsEl.appendChild(div);
+      return div;
+    }
+
+    const step1 = addStep('Uploading image...');
+    
+    try {
+      // Upload image first
+      const imageKey = `rxlabel_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const base64 = dataURL.split(',')[1];
+      
+      await fetch(`${API_BASE}/write`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: imageKey, value: base64 })
+      });
+      
+      step1.classList.replace('text-slate-400', 'text-successGreen');
+      step1.querySelector('span').textContent = '✅';
+      
+      const step2 = addStep('Reading label with AI...');
+      document.getElementById('processingStatus').textContent = 'Analyzing label...';
+
+      const imageUrl = `${API_BASE}/serve_image?key=${imageKey}`;
+
+      // Use imageMod to extract text from the label
+      const ocrResult = await callAI('imageMod', {
+        prompt: `You are an expert OCR system specialized in reading prescription medication labels. Analyze this prescription label image carefully. Extract ALL visible text from the label including medication name, dosage, frequency, patient name, doctor name, pharmacy name, warnings, refill info, and any other text. Return a JSON object with exactly this structure:
+{
+  "extractedText": string (the full raw text you can read from the label),
+  "confidence": string (either "high", "medium", or "low")
+}
+Be thorough and extract every piece of text visible on the label.`,
+        image: imageUrl
+      });
+
+      step2.classList.replace('text-slate-400', 'text-successGreen');
+      step2.querySelector('span:first-child').textContent = '✅';
+
+      const step3 = addStep('Parsing and structuring...');
+      document.getElementById('processingStatus').textContent = 'Structuring information...';
+
+      const extractedText = ocrResult.extractedText || ocrResult.data || JSON.stringify(ocrResult);
+
+      // Now parse the extracted text with genericAI
+      const parseResult = await callAI('genericAI', {
+        prompt: `You are a prescription label parser for visually impaired patients. Given the following text extracted from a prescription medication label, parse it into structured data. If some fields cannot be determined, use "Not found on label" as the value. Be thorough and accurate.
+
+Extracted label text:
+"""
+${extractedText}
+"""
+
+Return a JSON object with EXACTLY this structure (all values must be strings):
+{
+  "medicationName": string (the name of the medication, including brand and/or generic),
+  "dosage": string (the dosage amount, e.g. "500mg"),
+  "frequency": string (how often to take it, e.g. "Take 1 tablet twice daily"),
+  "instructions": string (full dosing instructions),
+  "warnings": string (any warnings, cautions, or side effects mentioned),
+  "patientName": string (the patient's name if visible),
+  "doctorName": string (the prescribing doctor's name if visible),
+  "pharmacyName": string (the pharmacy name if visible),
+  "refillInfo": string (refill information if available),
+  "expirationDate": string (expiration or discard date if visible),
+  "quantity": string (number of pills/amount dispensed),
+  "rxNumber": string (prescription number if visible),
+  "summary": string (a clear, simple 2-3 sentence summary a visually impaired person would find helpful, written in friendly plain language)
+}`
+      });
+
+      step3.classList.replace('text-slate-400', 'text-successGreen');
+      step3.querySelector('span:first-child').textContent = '✅';
+
+      // Cross-check with saved prescriptions
+      const step4 = addStep('Checking against your records...');
+      document.getElementById('processingStatus').textContent = 'Verifying...';
+
+      const savedRx = JSON.parse(localStorage.getItem('rxreader_prescriptions') || '[]');
+      let discrepancies = [];
+      
+      if (savedRx.length > 0) {
+        const crossCheckResult = await callAI('genericAI', {
+          prompt: `You are a pharmacist assistant. Compare the following scanned label data against saved prescription records. Identify any discrepancies in medication name, dosage, or frequency that could indicate an error or concern.
+
+Scanned label:
+- Medication: ${parseResult.medicationName}
+- Dosage: ${parseResult.dosage}
+- Frequency: ${parseResult.frequency}
+- Instructions: ${parseResult.instructions}
+
+Saved prescription records:
+${JSON.stringify(savedRx, null, 2)}
+
+Return a JSON object with EXACTLY this structure:
+{
+  "matchFound": boolean (true if a matching medication was found in records),
+  "matchedMedication": string (the name of the matched medication, or "None"),
+  "discrepancies": [string] (array of strings describing any discrepancies found; empty array if none),
+  "riskLevel": string (either "none", "low", "medium", or "high"),
+  "recommendation": string (a clear recommendation for the patient)
+}`
+        });
+
+        discrepancies = crossCheckResult.discrepancies || [];
+        parseResult._crossCheck = crossCheckResult;
+      }
+
+      step4.classList.replace('text-slate-400', 'text-successGreen');
+      step4.querySelector('span:first-child').textContent = '✅';
+
+      // Save results
+      currentLabelData = parseResult;
+      currentLabelData._imageKey = imageKey;
+      currentLabelData._timestamp = new Date().toISOString();
+      currentLabelData._extractedText = extractedText;
+
+      // Save to history
+      const history = JSON.parse(localStorage.getItem('rxreader_history') || '[]');
+      history.unshift({
+        medicationName: parseResult.medicationName,
+        dosage: parseResult.dosage,
+        timestamp: currentLabelData._timestamp,
+        imageKey
+      });
+      if (history.length > 20) history.pop();
+      localStorage.setItem('rxreader_history', JSON.stringify(history));
+
+      // Display results
+      displayResults(parseResult);
+      showScreen('screenResults');
+
+      // Auto-speak
+      setTimeout(() => speakResults(), 500);
+
+    } catch (error) {
+      showScreen('screenHome');
+      showToast('❌ ' + error.message, 5000);
+    }
+  }
+
+  function displayResults(data) {
+    const el = document.getElementById('resultContent');
+    
+    const fields = [
+      { label: '💊 Medication', value: data.medicationName, important: true },
+      { label: '📏 Dosage', value: data.dosage, important: true },
+      { label: '⏰ Frequency', value: data.frequency, important: true },
+      { label: '📋 Instructions', value: data.instructions },
+      { label: '⚠️ Warnings', value: data.warnings, warning: true },
+      { label: '👤 Patient', value: data.patientName },
+      { label: '🩺 Doctor', value: data.doctorName },
+      { label: '🏥 Pharmacy', value: data.pharmacyName },
+      { label: '🔄 Refills', value: data.refillInfo },
+      { label: '📅 Expires', value: data.expirationDate },
+      { label: '💊 Quantity', value: data.quantity },
+      { label: '#️⃣ Rx Number', value: data.rxNumber },
+    ];
+
+    let html = `<div class="high-contrast-card mb-4">
+      <p class="text-2xl font-bold text-accent mb-3">📄 Label Summary</p>
+      <p class="field-value text-xl leading-relaxed">${data.summary || ''}</p>
+    </div>`;
+
+    // Cross-check results
+    if (data._crossCheck) {
+      const cc = data._crossCheck;
+      if (cc.discrepancies && cc.discrepancies.length > 0) {
+        html += `<div class="warning-badge mb-4 fade-in">
+          <p class="text-xl font-bold text-warningRed mb-2">⚠️ Discrepancies Found</p>
+          ${cc.discrepancies.map(d => `<p class="text-lg text-slate-200 mb-1">• ${d}</p>`).join('')}
+          <p class="text-lg text-warningYellow mt-2 font-semibold">${cc.recommendation}</p>
+        </div>`;
+      } else if (cc.matchFound) {
+        html += `<div class="safe-badge mb-4 fade-in">
+          <p class="text-xl font-bold text-successGreen">✅ Matches your records</p>
+          <p class="text-lg text-slate-200 mt-1">${cc.recommendation}</p>
+        </div>`;
+      }
+    }
+
+    html += '<div class="space-y-3">';
+    fields.forEach(f => {
+      if (!f.value || f.value === 'Not found on label') return;
+      const cardClass = f.warning ? 'warning-badge' : 'high-contrast-card';
+      html += `<div class="${cardClass} fade-in">
+        <p class="field-label">${f.label}</p>
+        <p class="field-value ${f.important ? 'text-2xl' : ''}">${f.value}</p>
+      </div>`;
+    });
+    html += '</div>';
+
+    el.innerHTML = html;
+  }
+
+  // Text to speech
+  window.speakResults = function() {
+    if (!currentLabelData) return;
+    stopSpeaking();
+    const d = currentLabelData;
+    let text = `Here is your prescription label information. `;
+    text += `Medication: ${d.medicationName}. `;
+    text += `Dosage: ${d.dosage}. `;
+    text += `Frequency: ${d.frequency}. `;
+    if (d.instructions && d.instructions !== 'Not found on label') text += `Instructions: ${d.instructions}. `;
+    if (d.warnings && d.warnings !== 'Not found on label') text += `Important warnings: ${d.warnings}. `;
+    text += d.summary || '';
+
+    if (d._crossCheck && d._crossCheck.discrepancies && d._crossCheck.discrepancies.length > 0) {
+      text += ` Warning: discrepancies were found when checking against your records. ${d._crossCheck.discrepancies.join('. ')}. ${d._crossCheck.recommendation}`;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.85;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    speechSynthesis.speak(utterance);
+    showToast('🔊 Reading aloud...');
+  };
+
+  window.stopSpeaking = function() {
+    speechSynthesis.cancel();
+  };
+
+  // Verification quiz
+  window.startVerification = async function() {
+    stopSpeaking();
+    showScreen('screenQuiz');
+    const quizEl = document.getElementById('quizContent');
+    const quizResultEl = document.getElementById('quizResult');
+    quizResultEl.classList.add('hidden');
+    quizEl.innerHTML = '<div class="text-center py-8"><div class="spinner mx-auto mb-4"></div><p class="text-xl text-slate-300">Creating your comprehension check...</p></div>';
+
+    try {
+      const d = currentLabelData;
+      const quizResult = await callAI('genericAI', {
+        prompt: `You are creating a medication comprehension quiz for a visually impaired patient. Based on the following prescription information, create 3 simple multiple-choice questions to verify the patient understands their medication correctly. Questions should be practical and safety-focused.
+
+Medication: ${d.medicationName}
+Dosage: ${d.dosage}
+Frequency: ${d.frequency}
+Instructions: ${d.instructions}
+Warnings: ${d.warnings}
+
+Return a JSON object with EXACTLY this structure:
+{
+  "questions": [
+    {
+      "question": string (the question text, clear and simple),
+      "options": [string, string, string] (exactly 3 answer options),
+      "correctIndex": number (0, 1, or 2 indicating which option is correct),
+      "explanation": string (brief explanation of the correct answer)
+    }
+  ]
+}
+
+Make sure there are exactly 3 questions. Keep language simple and friendly. Questions should test: 1) What medication they're taking and dosage, 2) When/how often to take it, 3) Important warnings or precautions.`
+      });
+
+      currentQuizData = quizResult.questions || quizResult;
+      if (!Array.isArray(currentQuizData)) {
+        currentQuizData = [currentQuizData];
+      }
+      
+      renderQuiz(0, 0, currentQuizData.length);
+
+    } catch (error) {
+      quizEl.innerHTML = `<div class="warning-badge"><p class="text-xl font-bold text-warningRed">Couldn't create quiz</p><p class="text-lg text-slate-300 mt-2">${error.message}</p></div>`;
+    }
+  };
+
+  let quizScore = 0;
+
+  function renderQuiz(qIndex, score, total) {
+    quizScore = score;
+    const quizEl = document.getElementById('quizContent');
+    const quizResultEl = document.getElementById('quizResult');
+
+    if (qIndex >= currentQuizData.length) {
+      // Quiz complete
+      quizEl.innerHTML = '';
+      quizResultEl.classList.remove('hidden');
+      const pct = Math.round((score / total) * 100);
+      const passed = pct >= 67;
+      
+      quizResultEl.innerHTML = `
+        <div class="${passed ? 'safe-badge' : 'warning-badge'} text-center py-6">
+          <p class="text-4xl mb-3">${passed ? '🎉' : '⚠️'}</p>
+          <p class="text-3xl font-bold ${passed ? 'text-successGreen' : 'text-warningRed'} mb-2">
+            ${score}/${total} Correct (${pct}%)
+          </p>
+          <p class="text-xl ${passed ? 'text-slate-200' : 'text-warningYellow'}">
+            ${passed ? 'Great job! You understand your medication well.' : 'You may want to review your label again or speak with your pharmacist.'}
+          </p>
+        </div>
+        <div class="flex gap-3 mt-6">
+          <button onclick="speakResults()" class="btn-primary bg-accent text-safeBg flex-1 py-4 text-xl">🔊 Hear Label Again</button>
+          <button onclick="goHome()" class="btn-primary bg-cardBg border-2 border-slate-500 text-white flex-1 py-4 text-xl">🏠 Home</button>
+        </div>
+        ${!passed ? '<button onclick="startVerification()" class="btn-primary bg-primary text-white w-full py-4 mt-3 text-xl">🔄 Try Again</button>' : ''}
+      `;
+
+      // Save verification result
+      const history = JSON.parse(localStorage.getItem('rxreader_history') || '[]');
+      if (history.length > 0) {
+        history[0].verified = passed;
+        history[0].score = `${score}/${total}`;
+        localStorage.setItem('rxreader_history', JSON.stringify(history));
+      }
+
+      // Speak result
+      const msg = passed ? `Congratulations! You got ${score} out of ${total} correct. You understand your medication well.` : `You got ${score} out of ${total} correct. You may want to review your label again or speak with your pharmacist.`;
+      const utt = new SpeechSynthesisUtterance(msg);
+      utt.rate = 0.85;
+      speechSynthesis.speak(utt);
+      
+      return;
+    }
+
+    const q = currentQuizData[qIndex];
+    let html = `
+      <div class="high-contrast-card fade-in">
+        <p class="text-accent font-bold text-lg mb-2">Question ${qIndex + 1} of ${total}</p>
+        <p class="text-2xl font-bold mb-6 leading-relaxed">${q.question}</p>
+        <div class="space-y-3" id="quizOptions">
+    `;
+
+    q.options.forEach((opt, i) => {
+      html += `<button class="quiz-btn bg-slate-600 text-white w-full text-left px-5 py-4" 
+        onclick="answerQuiz(${qIndex}, ${i}, ${q.correctIndex}, ${score}, ${total})" 
+        aria-label="Option ${i + 1}: ${opt}">
+        <span class="text-accent font-bold mr-3">${String.fromCharCode(65 + i)}.</span> ${opt}
+      </button>`;
+    });
+
+    html += '</div></div>';
+    quizEl.innerHTML = html;
+
+    // Speak the question
+    const utt = new SpeechSynthesisUtterance(`Question ${qIndex + 1}. ${q.question}. Option A: ${q.options[0]}. Option B: ${q.options[1]}. Option C: ${q.options[2]}.`);
+    utt.rate = 0.85;
+    speechSynthesis.speak(utt);
+  }
+
+  window.answerQuiz = function(qIndex, selected, correct, score, total) {
+    stopSpeaking();
+    const buttons = document.querySelectorAll('#quizOptions button');
+    buttons.forEach((btn, i) => {
+      btn.disabled = true;
+      if (i === correct) btn.classList.add('correct');
+      if (i === selected && selected !== correct) btn.classList.add('incorrect');
+    });
+
+    const isCorrect = selected === correct;
+    const newScore = isCorrect ? score + 1 : score;
+    const q = currentQuizData[qIndex];
+
+    // Show explanation
+    const explDiv = document.createElement('div');
+    explDiv.className = `mt-4 p-4 rounded-xl ${isCorrect ? 'bg-green-900/50 border border-green-600' : 'bg-red-900/50 border border-red-600'} fade-in`;
+    explDiv.innerHTML = `<p class="text-xl font-bold ${isCorrect ? 'text-successGreen' : 'text-warningRed'} mb-2">${isCorrect ? '✅ Correct!' : '❌ Not quite'}</p>
+      <p class="text-lg text-slate-200">${q.explanation}</p>`;
+    document.getElementById('quizOptions').after(explDiv);
+
+    // Speak feedback
+    const msg = isCorrect ? `Correct! ${q.explanation}` : `Not quite. ${q.explanation}`;
+    const utt = new SpeechSynthesisUtterance(msg);
+    utt.rate = 0.85;
+    speechSynthesis.speak(utt);
+
+    // Next question after delay
+    setTimeout(() => {
+      renderQuiz(qIndex + 1, newScore, total);
+    }, 3000);
+  };
+
+  // Recent scans
+  function loadRecentScans() {
+    const history = JSON.parse(localStorage.getItem('rxreader_history') || '[]');
+    const el = document.getElementById('recentScans');
+    if (history.length === 0) {
+      el.innerHTML = '';
+      return;
+    }
+
+    let html = '<p class="text-xl font-bold text-accent mb-3">📋 Recent Scans</p>';
+    html += '<div class="space-y-3">';
+    history.slice(0, 5).forEach((item, i) => {
+      const date = new Date(item.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const verified = item.verified === true ? '✅' : item.verified === false ? '⚠️' : '⏳';
+      html += `<div class="high-contrast-card flex items-center justify-between cursor-pointer" onclick="reloadScan(${i})" role="button" tabindex="0" aria-label="View ${item.medicationName} scan from ${date}">
+        <div>
+          <p class="field-value text-xl">${item.medicationName || 'Unknown'}</p>
+          <p class="text-slate-400 text-base">${item.dosage || ''} • ${date}</p>
+        </div>
+        <span class="text-2xl">${verified}</span>
+      </div>`;
+    });
+    html += '</div>';
+    if (history.length > 0) {
+      html += `<button onclick="clearHistory()" class="text-slate-500 text-base mt-3 underline" aria-label="Clear scan history">Clear history</button>`;
+    }
+    el.innerHTML = html;
+  }
+
+  window.reloadScan = function(index) {
+    const history = JSON.parse(localStorage.getItem('rxreader_history') || '[]');
+    const item = history[index];
+    if (item && item.imageKey) {
+      showToast('🔄 Loading scan...');
+      // We'd need the full data stored; for now just show info
+      showToast(`${item.medicationName} - ${item.dosage}`, 3000);
+    }
+  };
+
+  window.clearHistory = function() {
+    if (confirm('Clear all scan history?')) {
+      localStorage.removeItem('rxreader_history');
+      loadRecentScans();
+      showToast('History cleared');
+    }
+  };
+
+  // Pharmacy records
+  window.showPharmacyScreen = function() {
+    showScreen('screenPharmacy');
+    const records = JSON.parse(localStorage.getItem('rxreader_prescriptions') || '[]');
+    const el = document.getElementById('pharmacyContent');
+
+    if (records.length === 0) {
+      el.innerHTML = `<div class="high-contrast-card text-center py-8">
+        <p class="text-4xl mb-3">📝</p>
+        <p class="text-xl text-slate-300">No prescription records yet.</p>
+        <p class="text-lg text-slate-400 mt-2">Add your prescriptions so we can cross-check scanned labels for accuracy.</p>
+      </div>`;
+      return;
+    }
+
+    let html = '<div class="space-y-3">';
+    records.forEach((rx, i) => {
+      html += `<div class="high-contrast-card">
+        <div class="flex justify-between items-start">
+          <div>
+            <p class="field-value text-xl">${rx.medName}</p>
+            <p class="text-accent text-lg font-semibold">${rx.dose} • ${rx.frequency}</p>
+            ${rx.warnings ? `<p class="text-warningYellow text-base mt-1">⚠️ ${rx.warnings}</p>` : ''}
+            ${rx.doctor ? `<p class="text-slate-400 text-base mt-1">🩺 ${rx.doctor}</p>` : ''}
+          </div>
+          <button onclick="deleteRx(${i})" class="text-red-400 text-lg font-bold px-3 py-1" aria-label="Delete ${rx.medName}">🗑️</button>
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  };
+
+  window.addPrescription = function() {
+    showScreen('screenAddRx');
+    document.getElementById('rxForm').reset();
+  };
+
+  window.saveRx = function(e) {
+    e.preventDefault();
+    const rx = {
+      medName: document.getElementById('rxMedName').value.trim(),
+      dose: document.getElementById('rxDose').value.trim(),
+      frequency: document.getElementById('rxFreq').value.trim(),
+      warnings: document.getElementById('rxWarnings').value.trim(),
+      doctor: document.getElementById('rxDoctor').value.trim(),
+      addedAt: new Date().toISOString()
+    };
+    const records = JSON.parse(localStorage.getItem('rxreader_prescriptions') || '[]');
+    records.push(rx);
+    localStorage.setItem('rxreader_prescriptions', JSON.stringify(records));
+    showToast('✅ Prescription saved!');
+    showPharmacyScreen();
+  };
+
+  window.deleteRx = function(index) {
+    if (!confirm('Delete this prescription record?')) return;
+    const records = JSON.parse(localStorage.getItem('rxreader_prescriptions') || '[]');
+    records.splice(index, 1);
+    localStorage.setItem('rxreader_prescriptions', JSON.stringify(records));
+    showPharmacyScreen();
+    showToast('Prescription deleted');
+  };
+
+  // Voice commands
+  function initSpeechRecognition() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (e) => {
+      const last = e.results[e.results.length - 1];
+      if (last.isFinal) {
+        const cmd = last[0].transcript.toLowerCase().trim();
+        handleVoiceCommand(cmd);
+      }
+    };
+
+    recognition.onerror = () => {};
+    recognition.onend = () => {
+      if (isListening) {
+        try { recognition.start(); } catch {}
+      }
+    };
+  }
+
+  function handleVoiceCommand(cmd) {
+    showToast(`🎤 Heard: "${cmd}"`);
+    if (cmd.includes('scan') || cmd.includes('capture') || cmd.includes('photo')) {
+      startCapture();
+    } else if (cmd.includes('read') || cmd.includes('speak') || cmd.includes('aloud')) {
+      speakResults();
+    } else if (cmd.includes('stop')) {
+      stopSpeaking();
+    } else if (cmd.includes('verify') || cmd.includes('quiz') || cmd.includes('check')) {
+      if (currentLabelData) startVerification();
+    } else if (cmd.includes('home') || cmd.includes('back')) {
+      goHome();
+    }
+  }
+
+  window.toggleVoiceCommand = function() {
+    if (!recognition) {
+      showToast('Voice commands not supported in this browser');
+      return;
+    }
+    isListening = !isListening;
+    const btn = document.getElementById('voiceBtn');
+    if (isListening) {
+      recognition.start();
+      btn.classList.add('border-successGreen', 'text-successGreen');
+      btn.classList.remove('border-slate-500', 'text-white');
+      btn.innerHTML = '🎤 Voice Commands: ON';
+      showToast('🎤 Voice commands activated! Say "scan", "read", "stop", "verify", or "home"');
+    } else {
+      recognition.stop();
+      btn.classList.remove('border-successGreen', 'text-successGreen');
+      btn.classList.add('border-slate-500', 'text-white');
+      btn.innerHTML = '🎤 Voice Commands';
+      showToast('Voice commands deactivated');
+    }
+  };
+
+})();
+</script>
+
+</body>
+</html>
