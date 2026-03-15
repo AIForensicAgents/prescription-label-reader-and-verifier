@@ -1,0 +1,1 @@
+📸 Capture  →  🔍 Enhance & Extract  →  🗣️ Speak & Display  →  ✅ Verify  →  🔗 Cross-Check
